@@ -1,0 +1,3 @@
+[submodule "cqcppsdk"]
+	path = cqcppsdk
+	url = https://github.com/cqmoe/cqcppsdk.git
