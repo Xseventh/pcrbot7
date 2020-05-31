@@ -3,15 +3,25 @@
 #include <sstream>
 #include <regex>
 #include <cstdio>
+#include <utility>
 #include <vector>
+#include <string>
 
 #include <cqcppsdk/cqcppsdk.h>
 #include <Windows.h>
+#include <chrono>
+#include <fstream>
+#include <iomanip>
+#include <direct.h>
 
 using namespace cq;
 using namespace std;
 using Message = cq::message::Message;
 using MessageSegment = cq::message::MessageSegment;
+
+namespace std::chrono {
+using days = chrono::duration<int, ratio<86400>>;
+}
 
 using cq::utils::s2ws;
 using cq::utils::ws2s;
@@ -30,7 +40,10 @@ class PcrTeamWar {
               mBossHp(6000000),
               mBossMaxHp({6000000, 8000000, 10000000, 12000000, 20000000}) {
     }
-    bool isEnable() {
+    void setGroupId(int64_t groupId) {
+        mDamageTable.setGroupId(groupId);
+    }
+    bool isEnable() const {
         return mEnable;
     }
     string botEnable() {
@@ -57,7 +70,7 @@ class PcrTeamWar {
         mBossHp = mBossMaxHp[0];
         return message;
     }
-    string showNowBoss() { //查看
+    string showNowBoss() const { //查看
         return "当前" + to_string(mNGTime) + "周目，" + to_string(mBossId) + "号boss生命值" + to_string(mBossHp);
     }
     string correctedBoss(string msg) { // 修正
@@ -76,7 +89,7 @@ class PcrTeamWar {
         mAttackerName = user_name;
         return *mAttackerName + "已开始挑战Boss\n" + showNowBoss();
     }
-    optional<string> completeAttackBoss(string msg, int64_t user_id, string user_name) { // 完成击杀
+    optional<string> completeAttackBoss(string msg, int64_t user_id, const string &user_name) { // 完成击杀
         if (user_id != *mAttackerId) return nullopt;
         regex splitRegex("\\s+");
         auto result = ++sregex_token_iterator(msg.begin(), msg.end(), splitRegex, -1);
@@ -89,24 +102,25 @@ class PcrTeamWar {
         if (!attack(damage)) {
             return "请正确输入伤害，如果已击杀请输入“完成 击杀”";
         }
-        mDamageTable[user_id].first = user_name;
-        mDamageTable[user_id].second.emplace_back(damage);
+        mDamageTable.setName(user_id, user_name);
+        mDamageTable.insertDamage(user_id, damage);
         string message = user_name + "已完成挑战Boss\n";
         mAttackerId.reset();
         mAttackerName.reset();
+        mDamageTable.saveToFile();
         return message + showNowBoss();
     }
     optional<string> recallAttack(int64_t user_id, string user_name) {
-        mDamageTable[user_id].first = user_name;
-        if (mDamageTable[user_id].second.size() == 0) return nullopt;
-        int damage = mDamageTable[user_id].second.back();
-        mDamageTable[user_id].second.pop_back();
-        attack(-damage);
+        mDamageTable.setName(user_id, user_name);
+        optional<int> damage = mDamageTable.popBackDamage(user_id);
+        if (damage == nullopt) return nullopt;
+        attack(-*damage);
+        mDamageTable.saveToFile();
         return "撤回最后一次出刀成功\n" + showNowBoss();
     }
     string showAllDamage() {
-        string message = "成员出刀伤害表如下：\n";
-        for (auto &i : mDamageTable) {
+        string message = "成员出刀伤害表\n";
+        for (auto &i : mDamageTable.getTable()) {
             auto &user = i.second;
             message += user.first + " 出刀数： " + to_string(user.second.size()) + "伤害： ";
             int sumDamage = 0;
@@ -148,11 +162,65 @@ class PcrTeamWar {
     int mBossId;
     int mBossHp;
     vector<int> mBossMaxHp;
-    map<int64_t, pair<string, vector<int>>> mDamageTable; //QQ号->群名片->伤害
+    class DamageTable {
+      public:
+        void setGroupId(int64_t groupId) {
+            mGroupId = groupId;
+        }
+        const map<int64_t, pair<string, vector<int>>> &getTable() const {
+            return mTable;
+        }
+        optional<string> getName(int64_t userId) const {
+            if (mTable.count(userId) == 0)
+                return nullopt;
+            return mTable.at(userId).first;
+        }
+        void setName(int64_t userId, string userName) {
+            mTable[userId].first = userName;
+        }
+        void insertDamage(int64_t userId, int damage) {
+            mTable[userId].second.emplace_back(damage);
+        }
+        optional<int> popBackDamage(int64_t userId) {
+            if (mTable[userId].second.size() == 0)return nullopt;
+            int damage = mTable[userId].second.back();
+            mTable[userId].second.pop_back();
+            return damage;
+        }
+        void saveToFile() {
+            auto now = chrono::system_clock::now();
+            auto hours = (chrono::duration_cast<chrono::hours>(now.time_since_epoch()).count() + 8) % 24;
+            if (hours < 5) {
+                now -= chrono::days(1);
+            }
+            time_t now_time_t = chrono::system_clock::to_time_t(now);
+            std::tm buf;
+            localtime_s(&buf, &now_time_t);
+            string date;
+            {
+                stringstream timestream;
+                timestream << put_time(&buf, "%Y-%m-%d");
+                timestream >> date;
+            }
+            _mkdir(("./" + to_string(mGroupId)).c_str());
+            ofstream outFile(s2ws("./" + to_string(mGroupId) + "/" + date + "出刀结果.csv"));
+            for (auto &row : mTable) {
+                outFile << row.second.first;
+                auto &damages = row.second.second;
+                for (auto &damage:damages) {
+                    outFile << " ," << damage;
+                }
+                outFile << "\n";
+            }
+        }
+      private:
+        int mGroupId;
+        map<int64_t, pair<string, vector<int>>> mTable;//QQ号->群名片->伤害
+    } mDamageTable;
 };
 set<int64_t> GROUP_GM_ID{GM_ID}; // 这个是私聊用的，只识别GM账号的私聊
 map<int64_t, PcrTeamWar> TEAM_WAR_BOT; //每个群号映射一个会战bot类
-set<int64_t> ENABLED_GROUPS = {GROUP_ID}; // 暂时没用
+set<int64_t> ENABLED_GROUPS = {GROUP_ID,863984185}; // 暂时没用
 
 struct FilterInput {
     optional<int64_t> mGroupId;
@@ -161,10 +229,10 @@ struct FilterInput {
     optional<string> mMessage;
     optional<GroupRole> mUserRole;
 };
-using FilterFunction = function<optional<string>(FilterInput, smatch)>;
 struct Filter {
+    using FilterFunction = function<optional<string>(FilterInput, smatch)>;
     Filter(string _regex_string, FilterFunction _func)
-            : regex_string(_regex_string), func(_func) {
+            : regex_string(std::move(_regex_string)), func(std::move(_func)) {
     }
     string regex_string;
     FilterFunction func;
@@ -180,21 +248,23 @@ vector<Filter> GroupFilters; // qq群消息经过这个filter后分发到对应�
 
 CQ_INIT {
     on_enable([] {
+#pragma region Group_Function_Register
         GroupFilters.emplace_back("\\s*开启bot\\s*",
                                   [](const FilterInput &input, const smatch &result) -> optional<string> {
                                       auto &bot = TEAM_WAR_BOT[*input.mGroupId];
-                                      if (input.mUserRole == GroupRole::MEMBER || bot.isEnable()) return nullopt;
+                                      if ((input.mUserRole == GroupRole::MEMBER && GROUP_GM_ID.count(*input.mUserId) == 0) || bot.isEnable()) return nullopt;
                                       return bot.botEnable();
                                   });
         GroupFilters.emplace_back("\\s*关闭bot\\s*",
                                   [](const FilterInput &input, const smatch &result) -> optional<string> {
                                       auto &bot = TEAM_WAR_BOT[*input.mGroupId];
-                                      if (input.mUserRole == GroupRole::MEMBER || !bot.isEnable()) return nullopt;
+                                      if ((input.mUserRole == GroupRole::MEMBER && GROUP_GM_ID.count(*input.mUserId) == 0) || !bot.isEnable()) return nullopt;
                                       return bot.botDisable();
                                   });
         GroupFilters.emplace_back("\\s*((boss)?录入(\\s+[[:alnum:]]{1,9})+)\\s*",
                                   [](const FilterInput &input, const smatch &result) -> optional<string> {
                                       auto &bot = TEAM_WAR_BOT[*input.mGroupId];
+                                      if(!bot.isEnable()) return nullopt;
                                       auto &msg = result[1];
                                       if (input.mUserRole == GroupRole::MEMBER) return nullopt;
                                       return bot.initBossHp(msg);
@@ -202,11 +272,13 @@ CQ_INIT {
         GroupFilters.emplace_back("\\s*(boss)?查看\\s*",
                                   [](const FilterInput &input, const smatch &result) -> optional<string> {
                                       auto &bot = TEAM_WAR_BOT[*input.mGroupId];
+                                      if(!bot.isEnable()) return nullopt;
                                       return bot.showNowBoss();
                                   });
         GroupFilters.emplace_back("\\s*((boss)?修正(\\s+[[:alnum:]]{1,9}){3,3})\\s*",
                                   [](const FilterInput &input, const smatch &result) -> optional<string> {
                                       auto &bot = TEAM_WAR_BOT[*input.mGroupId];
+                                      if(!bot.isEnable()) return nullopt;
                                       auto &msg = result[1];
                                       if (input.mUserRole == GroupRole::MEMBER) return nullopt;
                                       return bot.correctedBoss(msg);
@@ -214,22 +286,26 @@ CQ_INIT {
         GroupFilters.emplace_back("\\s*申请出刀\\s*",
                                   [](const FilterInput &input, const smatch &result) -> optional<string> {
                                       auto &bot = TEAM_WAR_BOT[*input.mGroupId];
+                                      if(!bot.isEnable()) return nullopt;
                                       return bot.applyAttackBoss(*input.mUserId, *input.mUserName);
                                   });
         GroupFilters.emplace_back("\\s*(完成\\s+(击杀|[[:alnum:]]{1,9}))\\s*",
                                   [](const FilterInput &input, const smatch &result) -> optional<string> {
                                       auto &bot = TEAM_WAR_BOT[*input.mGroupId];
+                                      if(!bot.isEnable()) return nullopt;
                                       auto &msg = result[1];
                                       return bot.completeAttackBoss(msg, *input.mUserId, *input.mUserName);
                                   });
         GroupFilters.emplace_back("\\s*撤回出刀\\s*",
                                   [](const FilterInput &input, const smatch &result) -> optional<string> {
                                       auto &bot = TEAM_WAR_BOT[*input.mGroupId];
+                                      if(!bot.isEnable()) return nullopt;
                                       return bot.recallAttack(*input.mUserId, *input.mUserName);
                                   });
         GroupFilters.emplace_back("\\s*伤害查看\\s*",
                                   [](const FilterInput &input, const smatch &result) -> optional<string> {
                                       auto &bot = TEAM_WAR_BOT[*input.mGroupId];
+                                      if(!bot.isEnable()) return nullopt;
                                       return bot.showAllDamage();
                                   });
         GroupFilters.emplace_back("\\s*指令详情\\s*",
@@ -246,6 +322,8 @@ CQ_INIT {
                                               + "撤回出刀\n"
                                               + "伤害查看\n";
                                   });
+#pragma endregion Group_Function_Register
+        logging::info("初始化", "插件初始化完成");
         logging::info("启用", "插件已启用");
     });
 
@@ -319,10 +397,10 @@ CQ_INIT {
                 input.mGroupId = event.group_id;
                 {
                     auto mem_list = get_group_member_list(event.group_id); // 获取群成员列表
-                    for (auto i = 0; i < static_cast<int>(mem_list.size()); i++) {
-                        if (mem_list[i].user_id == *input.mUserId) {
-                            input.mUserName = mem_list[i].card == "" ? mem_list[i].nickname : mem_list[i].card;
-                            input.mUserRole = mem_list[i].role;
+                    for (auto &mem : mem_list) {
+                        if (mem.user_id == *input.mUserId) {
+                            input.mUserName = mem.card.empty() ? mem.nickname : mem.card;
+                            input.mUserRole = mem.role;
                             break;
                         }
                     }
@@ -341,10 +419,13 @@ CQ_INIT {
                     break;
                 }
             }
+            // 苟一下把groupid传进去
+            TEAM_WAR_BOT[*input.mGroupId].setGroupId(*input.mGroupId);
             // filter后调用
             if (msg != nullopt)
                 send_group_message(event.group_id, *msg); // 发送群消息
-        } catch (ApiError &) { // 忽略发送失败
+        } catch (ApiError &e) {
+            logging::error("群聊", e.what());
         }
         if (event.is_anonymous()) {
             logging::info("群聊", "消息是匿名消息, 匿名昵称: " + event.anonymous.name);
