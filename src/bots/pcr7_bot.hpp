@@ -131,6 +131,7 @@ class PcrTeamWarBot : IBot {
         return message + showNowBoss();
     }
     optional<string> recallAttack(int64_t user_id, string user_name) {
+        if(mAttacker.count(user_id)) return "撤回失败，请先完成当前的出刀再进行撤回操作";
         mDamageTable.setName(user_id, user_name);
         optional<int> damage = mDamageTable.popBackDamage(user_id);
         if (damage == nullopt) return nullopt;

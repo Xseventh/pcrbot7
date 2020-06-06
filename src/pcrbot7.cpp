@@ -107,7 +107,7 @@ CQ_INIT {
         gGroupFilters.emplace_back("\\s*大合刀模式开启\\s*",
                                    [](const FilterInput &input, const smatch &result) -> optional<string> {
                                        auto &bot = gPcrTeamWarBotFactory.getInstance(input);
-                                       if ((input.mUserRole == GroupRole::MEMBER
+                                       if (!bot.isEnable() || (input.mUserRole == GroupRole::MEMBER
                                                && GROUP_GM_ID.count(*input.mUserId) == 0) || bot.isEnableSuperAttack())
                                            return nullopt;
                                        return bot.botEnableSuperAttack();
@@ -115,7 +115,7 @@ CQ_INIT {
         gGroupFilters.emplace_back("\\s*大合刀模式关闭\\s*",
                                    [](const FilterInput &input, const smatch &result) -> optional<string> {
                                        auto &bot = gPcrTeamWarBotFactory.getInstance(input);
-                                       if ((input.mUserRole == GroupRole::MEMBER
+                                       if (!bot.isEnable() || (input.mUserRole == GroupRole::MEMBER
                                                && GROUP_GM_ID.count(*input.mUserId) == 0) || !bot.isEnableSuperAttack())
                                            return nullopt;
                                        return bot.botDisableSuperAttack();
