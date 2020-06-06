@@ -95,14 +95,15 @@ class PcrTeamWarBot : IBot {
         for (auto &attacker : mAttacker) {
             attackerMessage += attacker.second + "\n";
         }
-        if(mSuperAttack)
+        if (mSuperAttack) {
             if (mAttacker.size() >= 30) {
                 return attackerMessage + "正在挑战Boss人数已达到上限，请稍等！";
             }
-        else
+        } else {
             if (mAttacker.size() >= 3) {
                 return attackerMessage + "正在挑战Boss人数已达到上限，请稍等！";
             }
+        }
 
         mAttacker.insert(make_pair(user_id, user_name));
         attackerMessage += user_name + "\n";
@@ -225,7 +226,7 @@ class PcrTeamWarBot : IBot {
             _mkdir(("./" + to_string(mGroupId)).c_str());
             ofstream outFile(s2ws("./" + to_string(mGroupId) + "/" + date + "出刀结果.csv"));
             for (auto &row : mTable) {
-                outFile << row.first << "," << ansi(row.second.first);
+                outFile << row.first << "," << row.second.first;
                 auto &damages = row.second.second;
                 for (auto &damage:damages) {
                     outFile << " ," << damage;
